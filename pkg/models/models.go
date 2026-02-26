@@ -95,6 +95,7 @@ type Board map[Position]Tile
 //Game is the full game state
 type Game struct {
 	ID          uuid.UUID    `json:"id"`
+	Name        string       `json:"name"`
 	Status      GameStatus   `json:"status"`
 	Players     []*Player    `json:"players"`
 	Board       Board        `json:"-"`          //serialized separately via BoardTiles
@@ -164,6 +165,7 @@ type JoinGameRequest struct {
 //GameView is the client-safe view of a game, which hides sensitive information like the bag and other players' hands
 type GameView struct {
 	ID          uuid.UUID    `json:"id"`
+	Name        string       `json:"name"`
 	Status      GameStatus   `json:"status"`
 	Players     []PlayerView `json:"players"`
 	Board       []PlacedTile `json:"board"`
@@ -171,6 +173,7 @@ type GameView struct {
 	CurrentTurn int          `json:"current_turn"`
 	TurnNumber  int          `json:"turn_number"`
 	YourHand    []Tile       `json:"your_hand"`
+  FinalHands  map[uuid.UUID][]Tile `json:"final_hands,omitempty"` //only included at game end, shows all players' hands for final scoring
 }
 
 //PlayerView is the client-safe view of a player, which hides their hand and other sensitive information

@@ -5,7 +5,7 @@ import (
 	"math/rand"
 
 	"github.com/google/uuid"
-	"github.com/IntrepidT/qwirkle/pkg/models"
+	"github.com/IntrepidT/qwirkle-cat/pkg/models"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,6 +26,35 @@ var (
 )
 
 // ---------------------------------------------------------------------------
+// Cat name generator
+// ---------------------------------------------------------------------------
+
+var catAdjectives = []string{
+	"fluffy", "grumpy", "sleepy", "sneaky", "bouncy", "spooky", "chonky",
+	"derpy", "sassy", "zesty", "wiggly", "soggy", "crispy", "wobbly",
+	"smug", "dramatic", "suspicious", "confused", "chaotic", "tiny",
+	"ancient", "majestic", "cursed", "blessed", "feral", "distinguished",
+	"judgmental", "startled", "plotting", "loafing", "screaming", "vibrating",
+	"invisible", "enormous", "suspicious", "disappointed", "legendary",
+}
+
+var catMiddles = []string{
+	"whiskers", "mittens", "biscuit", "noodle", "mochi", "dumpling",
+	"fluffington", "purrkins", "snuggles", "thunderpaws", "moonbeam",
+	"fishstick", "spaghetti", "waffle", "pancake", "pretzel", "crouton",
+	"nugget", "meatball", "tater", "pickles", "butterbean", "crinkle",
+	"smudge", "mr-blorps", "captain", "professor", "doctor", "chairman",
+	"duchess", "lord", "baron", "countess", "admiral",
+}
+
+// GenerateCatName returns a name always ending in "cat", e.g. "fluffy-whiskers-cat"
+func GenerateCatName() string {
+	adj  := catAdjectives[rand.Intn(len(catAdjectives))]
+	mid  := catMiddles[rand.Intn(len(catMiddles))]
+	return adj + "-" + mid + "-cat"
+}
+
+// ---------------------------------------------------------------------------
 // Game lifecycle
 // ---------------------------------------------------------------------------
 
@@ -33,7 +62,8 @@ var (
 func NewGame(hostID uuid.UUID) models.Game {
 	g := models.Game{
 		ID:          uuid.New(),
-		Players:     []*models.Player{{ID: hostID}}, // NOTE: pointer slice to match models.Game.Players
+		Name:        GenerateCatName(),
+		Players:     []*models.Player{{ID: hostID}},
 		Board:       make(models.Board),
 		Bag:         fillBag(),
 		CurrentTurn: 0,
@@ -79,11 +109,12 @@ func StartGame(g *models.Game) error {
 
 	//set status to active
 	g.Status = models.GameActive
+  g.BagCount = len(g.Bag) // initialize bag count for game view consistency
 	return nil
 }
 
 //
-func GameViewFor(g *models.Game, playerID uuid.UUID) (models.GameView, error) {
+func GameViewFor(g *models.Game, playerID uuid.UUID) (*models.GameView, error) {
   player, _, err := findPlayer(g, playerID)
   if err != nil {
     return nil, err
@@ -92,24 +123,26 @@ func GameViewFor(g *models.Game, playerID uuid.UUID) (models.GameView, error) {
   //build the opponent views - hide hand and score for opponents
   playerViews := make([]models.PlayerView, len(g.Players))
   for i, p := range g.Players {
-    playerViews[i] = models.PlayerView {
-      ID:         p.ID,
-      Name:       p.Name,
-      HandCount:  len(p.Hand),
-      Score:      p.Score,
-      Status:     p.Status,
-    }
+      pv := models.PlayerView{
+          ID:        p.ID,
+          Name:      p.Name,
+          HandCount: len(p.Hand),
+          Score:     p.Score,
+          Status:    p.Status,
+      }
+      playerViews[i] = pv
   }
 
   return &models.GameView{
-    ID:           g.ID,
-    Status:       g.Status,
-    Players:      playerViews,
-    BoardTiles:   g.BoardTiles,
-    BagCount:     len(g.Bag),
-    CurrentTurn:  g.CurrentTurn,
-    TurnNumber:   g.TurnNumber,
-    YourHand:     player.Hand,
+    ID:          g.ID,
+    Name:        g.Name,
+    Status:      g.Status,
+    Players:     playerViews,
+    Board:       g.BoardTiles,
+    BagCount:    len(g.Bag),
+    CurrentTurn: g.CurrentTurn,
+    TurnNumber:  g.TurnNumber,
+    YourHand:    player.Hand,
   }, nil
 }
 
@@ -121,9 +154,15 @@ func GameViewFor(g *models.Game, playerID uuid.UUID) (models.GameView, error) {
 func PlaceTiles(g *models.Game, playerID uuid.UUID, placements []models.PlacedTile) (int, error) {
 
 	//validate it is the player's turn
-	player, _, err := findPlayer(g, playerID)
+	player, idx, err := findPlayer(g, playerID)
 	if err != nil {
 		return 0, err
+	}
+	if g.Status != models.GameActive {
+		return 0, ErrGameNotStarted
+	}
+	if idx != g.CurrentTurn {
+		return 0, ErrNotYourTurn
 	}
 
 	//validate no duplicate tiles in this placement batch (do this before mutating the hand)
@@ -135,72 +174,85 @@ func PlaceTiles(g *models.Game, playerID uuid.UUID, placements []models.PlacedTi
 		seen[p.Tile] = true
 	}
 
-	//validate all tiles are in the player's hand
+	// 1. check all tiles exist in hand without mutating yet
+	handCopy := make([]models.Tile, len(player.Hand))
+	copy(handCopy, player.Hand)
 	for _, p := range placements {
-		if err := removeTileFromHand(player, []models.Tile{p.Tile}); err != nil { // NOTE: pointer — no & needed
-			return 0, err
+		found := false
+		for i, t := range handCopy {
+			if t == p.Tile {
+				handCopy = append(handCopy[:i], handCopy[i+1:]...)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return 0, ErrNotInHand
 		}
 	}
 
-	//validate all positions are unoccupied
+	// 2. all positions must be unoccupied
 	for _, p := range placements {
 		if _, ok := g.Board[p.Position]; ok {
 			return 0, ErrPositionOccupied
 		}
 	}
 
-	//validate placements form valid lines
-	for _, p := range placements {
-		horizontalLine := getLine(g.Board, placements, p.Position, true)
-		verticalLine := getLine(g.Board, placements, p.Position, false)
+	// 3. multi-tile moves must all share the same row or same column
+	if len(placements) > 1 {
+		sameRow, sameCol := true, true
+		for i := 1; i < len(placements); i++ {
+			if placements[i].Position.Y != placements[0].Position.Y {
+				sameRow = false
+			}
+			if placements[i].Position.X != placements[0].Position.X {
+				sameCol = false
+			}
+		}
+		if !sameRow && !sameCol {
+			return 0, ErrInvalidPlacement
+		}
+	}
 
-		if len(horizontalLine) > 1 {
-			if err := validateLine(horizontalLine); err != nil {
+	// 4. resulting lines must be valid (same color XOR same shape, no duplicates)
+	for _, p := range placements {
+		if hLine := getLine(g.Board, placements, p.Position, true); len(hLine) > 1 {
+			if err := validateLine(hLine); err != nil {
 				return 0, err
 			}
 		}
-		if len(verticalLine) > 1 {
-			if err := validateLine(verticalLine); err != nil {
+		if vLine := getLine(g.Board, placements, p.Position, false); len(vLine) > 1 {
+			if err := validateLine(vLine); err != nil {
 				return 0, err
 			}
 		}
 	}
 
-	//validate each tile shares an attribute with at least one other tile, ensuring they are in the same line
-	for _, p := range placements {
-		horizontalLine := getLine(g.Board, placements, p.Position, true)
-		verticalLine := getLine(g.Board, placements, p.Position, false)
-
-		if len(horizontalLine) > 1 && len(verticalLine) > 1 {
-			return 0, ErrInvalidPlacement
-		}
-		if len(horizontalLine) == 1 && len(verticalLine) == 1 {
-			return 0, ErrInvalidPlacement
-		}
-	}
-
-	//at least one tile must be placed adjacent to an existing tile, unless it's the first move
+	// 5. at least one tile must touch the existing board (skip on first move)
 	if len(g.Board) > 0 {
 		adjacent := false
 		for _, p := range placements {
-			for _, dir := range []models.Position{{X: 0, Y: -1}, {X: 0, Y: 1}, {X: -1, Y: 0}, {X: 1, Y: 0}} {
-				adjacentPos := models.Position{X: p.Position.X + dir.X, Y: p.Position.Y + dir.Y}
-				if _, ok := g.Board[adjacentPos]; ok {
+			for _, d := range []models.Position{{X: 0, Y: -1}, {X: 0, Y: 1}, {X: -1, Y: 0}, {X: 1, Y: 0}} {
+				if _, ok := g.Board[models.Position{X: p.Position.X + d.X, Y: p.Position.Y + d.Y}]; ok {
 					adjacent = true
 					break
 				}
 			}
-			if adjacent {
-				break
-			}
+			if adjacent { break }
 		}
 		if !adjacent {
 			return 0, ErrInvalidPlacement
 		}
 	}
 
+	// all checks passed — now actually remove tiles from hand
+	for _, p := range placements {
+		removeTileFromHand(player, []models.Tile{p.Tile})
+	}
+
 	//calculate score for the move
 	score := scoreMove(g, placements)
+  player.Score += score
 
 	//update board with new placements
 	for _, p := range placements { // NOTE: removed stray `return err` that was inside this loop
@@ -212,15 +264,32 @@ func PlaceTiles(g *models.Game, playerID uuid.UUID, placements []models.PlacedTi
 	player.Hand = drawUpToFull(g, player) // NOTE: player is now *models.Player so this persists
 	advanceTurn(g)
 
+  //after advancing the turn, check if the game is over (if the player has no tiles left after placing, or if the bag is empty and each player has had 1 turn)
+  if checkGameOver(g) {
+    g.Status = models.GameFinished
+    //bonus: the player who emptied their hand
+    if len(player.Hand) == 0 {
+      player.Score += models.QwirkleBonus
+    }
+  }
+  g.TurnNumber++
+
 	return score, nil
 }
 
 //ExchangeTiles allows a player to exchange tiles from their hand with new tiles from the bag, if the bag has enough tiles
 func ExchangeTiles(g *models.Game, playerID uuid.UUID, tilesToExchange []models.Tile) error {
+
 	//validate it is the player's turn
-	player, _, err := findPlayer(g, playerID)
+	player, idx, err := findPlayer(g, playerID)
 	if err != nil {
 		return err
+	}
+	if g.Status != models.GameActive {
+		return ErrGameNotStarted
+	}
+	if idx != g.CurrentTurn {
+		return ErrNotYourTurn
 	}
 
 	//validate bag has enough tiles to exchange (check before touching the hand)
@@ -246,6 +315,8 @@ func ExchangeTiles(g *models.Game, playerID uuid.UUID, tilesToExchange []models.
 
 	//advance turn to next player
 	advanceTurn(g)
+
+  g.BagCount = len(g.Bag)
 
 	return nil
 }
@@ -471,6 +542,9 @@ func drawTiles(g *models.Game, num int) ([]models.Tile, error) {
 	}
 	drawn := g.Bag[:num]
 	g.Bag = g.Bag[num:]
+
+  g.BagCount = len(g.Bag) // update bag count for game view consistency
+
 	return drawn, nil
 }
 

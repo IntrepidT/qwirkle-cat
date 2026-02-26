@@ -1,5 +1,6 @@
-.PHONY: run build test lint docker-build docker-up tidy
+.PHONY: run build test lint docker-build docker-run tidy frontend-dev frontend-build
 
+# ── Go backend ──────────────────────────────────────────────────────────────
 run:
 	go run ./cmd/server
 
@@ -15,8 +16,20 @@ lint:
 tidy:
 	go mod tidy
 
-docker-build:
-	docker build -t qwirkle:latest .
+# ── Frontend (inside ./frontend) ────────────────────────────────────────────
+frontend-dev:
+	cd frontend && npm run dev
 
-docker-up:
-	docker-compose up --build
+frontend-build:
+	cd frontend && npm ci && npm run build
+
+# ── Docker ──────────────────────────────────────────────────────────────────
+docker-build:
+	docker build -t qwirklecat:latest .
+
+# Run the container — exposes port 8080 locally
+docker-run:
+	docker run --rm -p 8080:8080 qwirklecat:latest
+
+# Build then run in one step
+docker-up: docker-build docker-run

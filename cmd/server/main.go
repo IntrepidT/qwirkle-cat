@@ -7,6 +7,7 @@ import (
 
 	"github.com/IntrepidT/qwirkle-cat/internal/api"
 	"github.com/IntrepidT/qwirkle-cat/internal/store"
+	"github.com/IntrepidT/qwirkle-cat/internal/ws"
 )
 
 func main() {
@@ -16,7 +17,8 @@ func main() {
 	}
 
 	gameStore := store.NewGameStore()
-	handler := api.NewHandler(gameStore)
+	hub := ws.NewHub()
+	handler := api.NewHandler(gameStore, hub)
 
 	log.Printf("Qwirkle server listening on :%s", port)
 	if err := http.ListenAndServe(":"+port, handler.Router()); err != nil {
