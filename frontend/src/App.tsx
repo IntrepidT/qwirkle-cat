@@ -9,6 +9,7 @@ interface GameSession {
   gameId: string
   playerId: string
   playerName: string
+  avatarUrl: string
 }
 
 function AppInner() {
@@ -17,8 +18,8 @@ function AppInner() {
   if (!session) {
     return (
       <LobbyPage
-        onEnterGame={(gameId, playerId, playerName) =>
-          setSession({ gameId, playerId, playerName })
+        onEnterGame={(gameId, playerId, playerName, avatarUrl) =>
+          setSession({ gameId, playerId, playerName, avatarUrl })
         }
       />
     )
@@ -29,6 +30,7 @@ function AppInner() {
       gameId={session.gameId}
       playerId={session.playerId}
       playerName={session.playerName}
+      avatarUrl={session.avatarUrl}
       onBackToLobby={() => setSession(null)}
     />
   )

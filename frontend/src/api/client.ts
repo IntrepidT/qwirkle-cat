@@ -7,7 +7,7 @@ import type {
   PlacedTile,
   PlaceTilesResponse,
   Tile,
-} from './types'
+} from '../types/types'
 
 const api = axios.create({ baseURL: '/api' })
 

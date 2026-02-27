@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import type { GameView, ChatMessage } from '../types'
+import type { GameView, ChatMessage } from '../types/types'
 
 interface WsMessage {
   type: 'game_state' | 'chat'

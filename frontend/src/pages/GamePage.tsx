@@ -9,7 +9,7 @@ import PlayerList from '../components/PlayerList'
 import Chat from '../components/Chat'
 import GameOver from '../components/GameOver'
 import QwirkleConfetti from '../components/QwirkleConfetti'
-import type { ChatMessage, GameView, GameResults, PlacedTile, Position, Tile } from '../types'
+import type { ChatMessage, GameView, GameResults, PlacedTile, Position, Tile } from '../types/types'
 import { AVATAR_MESSAGE_PREFIX } from '../assets/catAssets'
 
 interface GamePageProps {
@@ -45,6 +45,10 @@ export default function GamePage({ gameId, playerId, playerName, avatarUrl, onBa
   const [placeError, setPlaceError] = useState<string | null>(null)
   const [qwirkleCount, setQwirkleCount] = useState(0)
   const [localHand, setLocalHand] = useState<Tile[] | null>(null)
+  const [lastPlayPositions, setLastPlayPositions] = useState<Position[]>([])
+  const [placementValid, setPlacementValid] = useState(true)
+  // Track the previous board so we can diff incoming state to find the last play's positions
+  const prevBoardKeysRef = useRef<Set<string>>(new Set())
   // avatarMap: maps player_id → gif URL, populated when players announce their avatar
   const [avatarMap, setAvatarMap] = useState<Record<string, string>>(() => ({
     [playerId]: avatarUrl,
@@ -64,11 +68,55 @@ export default function GamePage({ gameId, playerId, playerName, avatarUrl, onBa
   }, [])
 
   const onGameState = useCallback((data: GameView) => {
+    // Always refresh so bag_count, scores, current_turn stay live
+    refresh(data)
+
+    // Diff the incoming board against the previous snapshot to find newly placed tiles.
+    // This works for ALL players — the person who played AND observers.
+    if (data.board && data.board.length > 0) {
+      const newKeys = data.board.map((pt: PlacedTile) => `${pt.position.x},${pt.position.y}`)
+      const newPositions = data.board
+        .filter((pt: PlacedTile) => !prevBoardKeysRef.current.has(`${pt.position.x},${pt.position.y}`))
+        .map((pt: PlacedTile) => pt.position)
+      if (newPositions.length > 0) {
+        setLastPlayPositions(newPositions)
+      }
+      prevBoardKeysRef.current = new Set(newKeys)
+    }
+
     if (data.your_hand != null) {
-      refresh(data)
-      // sync local hand order when a new hand arrives (after a turn)
-      setLocalHand(null)
-      // clear any stale staged indices so newly drawn tiles aren't invisible
+      // Append new tiles to end rather than resetting order.
+      // Compare incoming hand to current to find newly drawn tiles.
+      setLocalHand(prev => {
+        const incoming = data.your_hand ?? []
+        if (!prev) return null  // no local order yet, let server order stand
+        // Find tiles in incoming that aren't accounted for in prev (by color+shape count)
+        const prevCounts = new Map<string, number>()
+        for (const t of prev) {
+          const k = `${t.color}-${t.shape}`
+          prevCounts.set(k, (prevCounts.get(k) ?? 0) + 1)
+        }
+        const newTiles: Tile[] = []
+        const remaining = new Map(prevCounts)
+        for (const t of incoming) {
+          const k = `${t.color}-${t.shape}`
+          if ((remaining.get(k) ?? 0) > 0) {
+            remaining.set(k, remaining.get(k)! - 1)
+          } else {
+            newTiles.push(t)
+          }
+        }
+        if (newTiles.length === 0) return null  // hand shrank (tiles played), reset order
+        // Keep existing tiles in their order, append new ones at end
+        const kept = prev.filter(t => {
+          const k = `${t.color}-${t.shape}`
+          // keep tiles still present in incoming
+          const incomingCount = incoming.filter(i => `${i.color}-${i.shape}` === k).length
+          const prevCount = prev.filter(p => `${p.color}-${p.shape}` === k).length
+          return incomingCount >= prevCount
+        })
+        return [...kept, ...newTiles]
+      })
       setStagedHandIndices([])
       setSelectedHandIndices([])
       setPendingPlacements([])
@@ -132,6 +180,11 @@ export default function GamePage({ gameId, playerId, playerName, avatarUrl, onBa
   // sync localHand when serverHand changes length (tiles were played/drawn)
   // but don't wipe a reorder the player just did
   const expectedHandSize = serverHand.length
+  useEffect(() => {
+    if (localHand && localHand.length !== expectedHandSize) {
+      setLocalHand(null)
+    }
+  }, [serverHand, expectedHandSize, localHand])
 
   // ---------------------------------------------------------------------------
   // Hand reorder
@@ -194,13 +247,18 @@ export default function GamePage({ gameId, playerId, playerName, avatarUrl, onBa
   // ---------------------------------------------------------------------------
 
   const handleSubmitPlacements = () => {
-    if (pendingPlacements.length === 0) return
+    if (pendingPlacements.length === 0 || !placementValid) return
     setPlaceError(null)
     placeTiles(pendingPlacements, {
       onSuccess: (data: any) => {
         const score = data?.score_earned ?? 0
         const qwirkles = data?.qwirkles ?? 0
-        addSystemMessage(`${playerName} placed ${pendingPlacements.length} tile${pendingPlacements.length > 1 ? 's' : ''} for ${score} point${score !== 1 ? 's' : ''}!`)
+        const finishBonus = data?.finish_bonus ?? 0
+        const totalScore = score + finishBonus
+        const msg = finishBonus > 0
+          ? `${playerName} placed ${pendingPlacements.length} tile${pendingPlacements.length > 1 ? 's' : ''} for ${score} pts + ${finishBonus} finish bonus = ${totalScore} pts!`
+          : `${playerName} placed ${pendingPlacements.length} tile${pendingPlacements.length > 1 ? 's' : ''} for ${score} point${score !== 1 ? 's' : ''}!`
+        addSystemMessage(msg)
         if (qwirkles > 0) setQwirkleCount(qwirkles)
         setPendingPlacements([])
         setSelectedHandIndices([])
@@ -232,6 +290,7 @@ export default function GamePage({ gameId, playerId, playerName, avatarUrl, onBa
         setSelectedHandIndices([])
         setStagedHandIndices([])
         setLocalHand(null)
+        setLastPlayPositions([])
       },
     })
   }
@@ -322,7 +381,7 @@ export default function GamePage({ gameId, playerId, playerName, avatarUrl, onBa
       {/* top bar */}
       <div className="border-b border-slate-800 px-4 py-2 shrink-0 flex items-center justify-between gap-4">
         <div className="flex items-center gap-2 shrink-0">
-          <h1 className="font-black tracking-tight text-lg">🐱 QWIRKLE</h1>
+          <h1 className="font-black tracking-tight text-lg">🐱 QWIRKLECAT</h1>
         </div>
 
         {/* cat game name */}
@@ -343,7 +402,7 @@ export default function GamePage({ gameId, playerId, playerName, avatarUrl, onBa
 
       {/* main layout */}
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex-1 overflow-hidden p-4 flex flex-col">
+        <div className="flex-[2] overflow-hidden p-4 flex flex-col min-w-0">
           {placeError && (
             <div className="mb-3 px-4 py-2 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm flex justify-between items-center shrink-0">
               <span>{placeError}</span>
@@ -354,18 +413,23 @@ export default function GamePage({ gameId, playerId, playerName, avatarUrl, onBa
             placedTiles={board}
             pendingPlacements={pendingPlacements}
             selectedTile={selectedTile}
+            isMyTurn={isMyTurn}
+            lastPlayPositions={lastPlayPositions}
             onCellClick={handleCellClick}
             onDrop={handleDrop}
             onUnstage={handleUnstage}
             onPendingClick={handleUnstage}
+            onValidityChange={(valid, _score) => setPlacementValid(valid)}
           />
         </div>
 
-        <div className="w-64 border-l border-slate-800 flex flex-col overflow-hidden p-4 gap-3">
+        <div className="flex-[1] min-w-[280px] border-l border-slate-800 flex flex-col overflow-hidden p-4 gap-3">
           <div className="shrink-0">
             <PlayerList players={players} currentTurn={game.current_turn} myPlayerId={playerId} avatarMap={avatarMap} />
           </div>
-          <Chat messages={chatMessages} myPlayerId={playerId} myAvatarUrl={avatarUrl} avatarMap={avatarMap} onSend={handleSendChat} />
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <Chat messages={chatMessages} myPlayerId={playerId} myAvatarUrl={avatarUrl} avatarMap={avatarMap} onSend={handleSendChat} />
+          </div>
         </div>
       </div>
 
@@ -385,10 +449,10 @@ export default function GamePage({ gameId, playerId, playerName, avatarUrl, onBa
               <>
                 <button
                   onClick={handleSubmitPlacements}
-                  disabled={isPlacing}
-                  className="px-4 py-2 bg-green-600 text-white font-semibold text-sm rounded-lg hover:bg-green-500 disabled:opacity-40 transition-colors"
+                  disabled={isPlacing || !placementValid}
+                  className="px-4 py-2 bg-green-600 text-white font-semibold text-sm rounded-lg hover:bg-green-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
-                  Place {pendingPlacements.length} tile{pendingPlacements.length > 1 ? 's' : ''}
+                  {!placementValid ? '✕ Illegal placement' : `Place ${pendingPlacements.length} tile${pendingPlacements.length > 1 ? 's' : ''}`}
                 </button>
                 <button
                   onClick={handleCancelPlacements}

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getGame, placeTiles as apiPlaceTiles, exchangeTiles as apiExchangeTiles, startGame as apiStartGame } from '../api/client'
-import type { GameView, PlacedTile, Tile } from '../types'
+import type { GameView, PlacedTile, Tile } from '../types/types'
 
 export function useGame(gameId: string, playerId: string) {
   const queryClient = useQueryClient()

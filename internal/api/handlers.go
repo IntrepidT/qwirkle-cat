@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -17,6 +18,8 @@ import (
 	"github.com/IntrepidT/qwirkle-cat/internal/ws"
 	"github.com/IntrepidT/qwirkle-cat/pkg/models"
 )
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 type Handler struct {
 	store *store.GameStore
@@ -298,15 +301,46 @@ func (h *Handler) PlaceTiles(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	score, err := game.PlaceTiles(g, req.PlayerID, req.Tiles)
+	result, err := game.PlaceTiles(g, req.PlayerID, req.Tiles)
 	if err != nil {
 		respondError(w, mapGameError(err), err.Error())
 		return
 	}
 	h.store.Save(g)
 	h.broadcastGameState(g)
+
+	// Build a system chat message so ALL players see the score announcement
+	playerName := ""
+	for _, p := range g.Players {
+		if p.ID == req.PlayerID {
+			playerName = p.Name
+			break
+		}
+	}
+	tileWord := "tile"
+	if len(req.Tiles) != 1 { tileWord = "tiles" }
+	var scoreMsg string
+	if result.FinishBonus > 0 {
+		scoreMsg = strings.Join([]string{
+			playerName, " placed ", itoa(len(req.Tiles)), " ", tileWord,
+			" for ", itoa(result.Score), " pts + ", itoa(result.FinishBonus), " finish bonus = ",
+			itoa(result.Score+result.FinishBonus), " pts!",
+		}, "")
+	} else {
+		ptWord := "point"
+		if result.Score != 1 { ptWord = "points" }
+		scoreMsg = playerName + " placed " + itoa(len(req.Tiles)) + " " + tileWord + " for " + itoa(result.Score) + " " + ptWord + "!"
+	}
+	// Broadcast system message to all OTHER players (sender handles locally)
+	h.hub.BroadcastSystemMessage(g.ID, req.PlayerID, scoreMsg)
+
 	view, _ := game.GameViewFor(g, req.PlayerID)
-	respondJSON(w, http.StatusOK, map[string]any{"score_earned": score, "game": view})
+	respondJSON(w, http.StatusOK, map[string]any{
+		"score_earned":  result.Score,
+		"qwirkles":      result.Qwirkles,
+		"finish_bonus":  result.FinishBonus,
+		"game":          view,
+	})
 }
 
 func (h *Handler) ExchangeTiles(w http.ResponseWriter, r *http.Request) {

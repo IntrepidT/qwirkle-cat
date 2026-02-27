@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Tile } from '../types'
+import type { Tile } from '../types/types'
 import TileComponent from './Tile'
 
 interface HandProps {

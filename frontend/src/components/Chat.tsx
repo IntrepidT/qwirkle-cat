@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import type { ChatMessage } from '../types'
+import type { ChatMessage } from '../types/types'
 import { GIF_MESSAGE_PREFIX } from '../assets/catAssets'
 
 // Tenor v1 API — LIVDSRZULELA is Tenor's official public demo key, works without signup.
@@ -164,7 +164,7 @@ export default function Chat({ messages, myPlayerId, myAvatarUrl, avatarMap = {}
         )}
         {dedupedMessages.map((msg, i) => {
           const isMe = msg.player_id === myPlayerId
-          const isSystem = msg.player_id === 'system'
+          const isSystem = msg.player_id === 'system' || msg.player_name === 'system'
           const gif = isGifMessage(msg.text)
 
           if (isSystem) {

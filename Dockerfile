@@ -19,7 +19,7 @@ RUN npm run build
 # Output is at /frontend/dist
 
 # ─── Stage 2: Build the Go backend ────────────────────────────────────────────
-FROM golang:1.22-alpine AS backend-builder
+FROM golang:1.25-alpine AS backend-builder
 
 WORKDIR /app
 

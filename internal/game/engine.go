@@ -150,26 +150,34 @@ func GameViewFor(g *models.Game, playerID uuid.UUID) (*models.GameView, error) {
 // Turn actions
 // ---------------------------------------------------------------------------
 
+// PlaceResult carries all scoring info from a PlaceTiles call
+type PlaceResult struct {
+	Score       int
+	Qwirkles    int
+	FinishBonus int
+	GameOver    bool
+}
+
 //PlaceTiles handles a player's turn, validating the placements, calculating the score, updating the board and player's hand, and advancing the turn
-func PlaceTiles(g *models.Game, playerID uuid.UUID, placements []models.PlacedTile) (int, error) {
+func PlaceTiles(g *models.Game, playerID uuid.UUID, placements []models.PlacedTile) (PlaceResult, error) {
 
 	//validate it is the player's turn
 	player, idx, err := findPlayer(g, playerID)
 	if err != nil {
-		return 0, err
+		return PlaceResult{}, err
 	}
 	if g.Status != models.GameActive {
-		return 0, ErrGameNotStarted
+		return PlaceResult{}, ErrGameNotStarted
 	}
 	if idx != g.CurrentTurn {
-		return 0, ErrNotYourTurn
+		return PlaceResult{}, ErrNotYourTurn
 	}
 
 	//validate no duplicate tiles in this placement batch (do this before mutating the hand)
 	seen := make(map[models.Tile]bool)
 	for _, p := range placements {
 		if seen[p.Tile] {
-			return 0, ErrInvalidPlacement
+			return PlaceResult{}, ErrInvalidPlacement
 		}
 		seen[p.Tile] = true
 	}
@@ -187,14 +195,14 @@ func PlaceTiles(g *models.Game, playerID uuid.UUID, placements []models.PlacedTi
 			}
 		}
 		if !found {
-			return 0, ErrNotInHand
+			return PlaceResult{}, ErrNotInHand
 		}
 	}
 
 	// 2. all positions must be unoccupied
 	for _, p := range placements {
 		if _, ok := g.Board[p.Position]; ok {
-			return 0, ErrPositionOccupied
+			return PlaceResult{}, ErrPositionOccupied
 		}
 	}
 
@@ -210,7 +218,7 @@ func PlaceTiles(g *models.Game, playerID uuid.UUID, placements []models.PlacedTi
 			}
 		}
 		if !sameRow && !sameCol {
-			return 0, ErrInvalidPlacement
+			return PlaceResult{}, ErrInvalidPlacement
 		}
 	}
 
@@ -218,12 +226,12 @@ func PlaceTiles(g *models.Game, playerID uuid.UUID, placements []models.PlacedTi
 	for _, p := range placements {
 		if hLine := getLine(g.Board, placements, p.Position, true); len(hLine) > 1 {
 			if err := validateLine(hLine); err != nil {
-				return 0, err
+				return PlaceResult{}, err
 			}
 		}
 		if vLine := getLine(g.Board, placements, p.Position, false); len(vLine) > 1 {
 			if err := validateLine(vLine); err != nil {
-				return 0, err
+				return PlaceResult{}, err
 			}
 		}
 	}
@@ -241,7 +249,7 @@ func PlaceTiles(g *models.Game, playerID uuid.UUID, placements []models.PlacedTi
 			if adjacent { break }
 		}
 		if !adjacent {
-			return 0, ErrInvalidPlacement
+			return PlaceResult{}, ErrInvalidPlacement
 		}
 	}
 
@@ -250,31 +258,39 @@ func PlaceTiles(g *models.Game, playerID uuid.UUID, placements []models.PlacedTi
 		removeTileFromHand(player, []models.Tile{p.Tile})
 	}
 
-	//calculate score for the move
-	score := scoreMove(g, placements)
-  player.Score += score
+	// calculate score and count qwirkles
+	score, qwirkles := scoreMoveWithQwirkles(g, placements)
+	player.Score += score
 
-	//update board with new placements
-	for _, p := range placements { // NOTE: removed stray `return err` that was inside this loop
+	// update board with new placements
+	for _, p := range placements {
 		g.Board[p.Position] = p.Tile
 	}
 	syncBoardTiles(g)
 
-	//refill player's hand from bag, then advance turn
-	player.Hand = drawUpToFull(g, player) // NOTE: player is now *models.Player so this persists
+	// refill player's hand from bag, then advance turn
+	player.Hand = drawUpToFull(g, player)
 	advanceTurn(g)
 
-  //after advancing the turn, check if the game is over (if the player has no tiles left after placing, or if the bag is empty and each player has had 1 turn)
-  if checkGameOver(g) {
-    g.Status = models.GameFinished
-    //bonus: the player who emptied their hand
-    if len(player.Hand) == 0 {
-      player.Score += models.QwirkleBonus
-    }
-  }
-  g.TurnNumber++
+	// check if the game is over
+	finishBonus := 0
+	gameOver := checkGameOver(g)
+	if gameOver {
+		g.Status = models.GameFinished
+		// bonus: the player who emptied their hand gets QwirkleBonus (6 pts)
+		if len(player.Hand) == 0 {
+			finishBonus = models.QwirkleBonus
+			player.Score += finishBonus
+		}
+	}
+	g.TurnNumber++
 
-	return score, nil
+	return PlaceResult{
+		Score:       score,
+		Qwirkles:    qwirkles,
+		FinishBonus: finishBonus,
+		GameOver:    gameOver,
+	}, nil
 }
 
 //ExchangeTiles allows a player to exchange tiles from their hand with new tiles from the bag, if the bag has enough tiles
@@ -336,21 +352,15 @@ func checkGameOver(g *models.Game) bool {
 // Scoring
 // ---------------------------------------------------------------------------
 
-//calculate the points for a set of placements
-// each line containing newly placed tile is scored; a Qwirkle line is worth 12
-func scoreMove(g *models.Game, placements []models.PlacedTile) int {
-    score := 0
-    
-    // track which lines we've already scored to avoid double-counting
-    // a line is uniquely identified by its axis and its fixed coordinate
+// scoreMoveWithQwirkles calculates points and counts how many Qwirkle lines were completed
+func scoreMoveWithQwirkles(g *models.Game, placements []models.PlacedTile) (score int, qwirkles int) {
     type lineKey struct {
         horizontal bool
-        fixedCoord int  // Y if horizontal, X if vertical
+        fixedCoord int
     }
     scored := make(map[lineKey]bool)
 
     for _, p := range placements {
-        // score horizontal line through this tile
         hKey := lineKey{true, p.Position.Y}
         if !scored[hKey] {
             line := getLine(g.Board, placements, p.Position, true)
@@ -358,12 +368,12 @@ func scoreMove(g *models.Game, placements []models.PlacedTile) int {
                 score += len(line)
                 if len(line) == 6 {
                     score += models.QwirkleBonus
+                    qwirkles++
                 }
             }
             scored[hKey] = true
         }
 
-        // score vertical line through this tile
         vKey := lineKey{false, p.Position.X}
         if !scored[vKey] {
             line := getLine(g.Board, placements, p.Position, false)
@@ -371,18 +381,17 @@ func scoreMove(g *models.Game, placements []models.PlacedTile) int {
                 score += len(line)
                 if len(line) == 6 {
                     score += models.QwirkleBonus
+                    qwirkles++
                 }
             }
             scored[vKey] = true
         }
     }
 
-    // a single tile with no neighbors scores 1
     if score == 0 {
         score = 1
     }
-
-    return score
+    return score, qwirkles
 }
 
 // ---------------------------------------------------------------------------

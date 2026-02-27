@@ -1,4 +1,4 @@
-import type { GameResults } from '../types'
+import type { GameResults } from '../types/types'
 
 interface GameOverProps {
   results: GameResults

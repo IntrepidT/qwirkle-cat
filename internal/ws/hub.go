@@ -195,3 +195,20 @@ func (h *Hub) BroadcastTo(gameID uuid.UUID, playerID uuid.UUID, msg any) {
         }
     }
 }
+
+// BroadcastSystemMessage sends a system chat message to all OTHER players in a game
+// (the sender adds their own copy locally, so we skip them here)
+func (h *Hub) BroadcastSystemMessage(gameID uuid.UUID, senderID uuid.UUID, text string) {
+    // Use a fixed sentinel UUID that the frontend recognises as "system"
+    systemID, _ := uuid.Parse("00000000-0000-0000-0000-000000000001")
+    msg := Message{
+        Type: MsgChat,
+        Payload: ChatPayload{
+            PlayerID:   systemID,
+            PlayerName: "system",
+            Text:       text,
+            SentAt:     time.Now(),
+        },
+    }
+    h.BroadcastToOthers(gameID, senderID, msg)
+}

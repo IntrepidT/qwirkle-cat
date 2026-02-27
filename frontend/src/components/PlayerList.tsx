@@ -1,4 +1,4 @@
-import type { PlayerView } from '../types'
+import type { PlayerView } from '../types/types'
 
 interface PlayerListProps {
   players: PlayerView[]
@@ -39,7 +39,7 @@ export default function PlayerList({ players, currentTurn, myPlayerId, avatarMap
                 'w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-sm shrink-0',
                 isTurn ? 'ring-2 ring-amber-400' : 'ring-1 ring-slate-600',
               ].join(' ')}>
-                🐱
+                {'\u{1F431}\uFE0F'}
               </div>
             )}
 

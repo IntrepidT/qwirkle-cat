@@ -1,4 +1,4 @@
-import type { Tile, Color, Shape } from '../types'
+import type { Tile, Color, Shape } from '../types/types'
 
 const COLOR_CLASSES: Record<Color, string> = {
   red:    'bg-red-500 border-red-700',
@@ -37,6 +37,7 @@ interface TileProps {
   selected?: boolean
   ghost?: boolean
   pending?: boolean
+  disabled?: boolean
   onClick?: () => void
   draggable?: boolean
   onDragStart?: (e: React.DragEvent) => void
@@ -55,7 +56,7 @@ const ANIM_STYLE = `
 .tile-pop { animation: tile-pop 180ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
 `
 
-export default function TileComponent({ tile, size = 'md', selected, ghost, pending, onClick, draggable, onDragStart, onDragEnd }: TileProps) {
+export default function TileComponent({ tile, size = 'md', selected, ghost, pending, disabled, onClick, draggable, onDragStart, onDragEnd }: TileProps) {
   const colorClass = COLOR_CLASSES[tile.color] ?? 'bg-gray-500 border-gray-700'
 
   return (
@@ -75,6 +76,7 @@ export default function TileComponent({ tile, size = 'md', selected, ghost, pend
           colorClass,
           selected ? 'ring-4 ring-white ring-offset-2 ring-offset-slate-950 scale-110 shadow-lg' : '',
           pending ? 'tile-pop ring-4 ring-amber-400 ring-offset-1 ring-offset-slate-900 shadow-amber-400/40 shadow-lg' : '',
+          disabled ? 'opacity-70 saturate-[0.7] cursor-default' : '',
           ghost ? 'opacity-30' : '',
           onClick ? 'cursor-pointer hover:scale-105 active:scale-95' : '',
           draggable && !ghost ? 'cursor-grab active:cursor-grabbing' : '',
